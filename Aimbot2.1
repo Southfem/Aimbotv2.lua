@@ -1,0 +1,677 @@
+print("[ZHU] script start")
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+
+_G.ZHU_SESSION = (_G.ZHU_SESSION or 0) + 1
+local MY_SESSION = _G.ZHU_SESSION
+print("[ZHU] session " .. MY_SESSION)
+
+for _, name in ipairs({"ZHU_Aimbot_Update","ZHU_Update","AimbotESP_Update","ZHU_Main","ZHU_Render"}) do
+    pcall(function() RunService:UnbindFromRenderStep(name) end)
+end
+
+local function nuke(container)
+    if not container then return 0 end
+    local n = 0
+    for _, c in ipairs(container:GetChildren()) do
+        if c:IsA("ScreenGui") then
+            local nm = c.Name
+            if nm:sub(1,3) == "ZHU" or nm:sub(1,4) == "TEST"
+                or nm:find("Aimbot") or nm:find("ESP") or nm:find("Crosshair")
+                or nm:find("Aim") or nm == "femboyhub" then
+                c:Destroy()
+                n = n + 1
+            end
+        end
+    end
+    return n
+end
+
+local LP = Players.LocalPlayer
+if not LP then warn("[ZHU] no LocalPlayer"); return end
+
+local PG = LP:FindFirstChild("PlayerGui")
+local CoreGui
+pcall(function() CoreGui = game:GetService("CoreGui") end)
+
+local n1 = nuke(PG)
+local n2 = nuke(CoreGui)
+print("[ZHU] cleaned " .. (n1+n2) .. " GUIs")
+
+local parentTarget = CoreGui or PG
+if not parentTarget then warn("[ZHU] no valid parent"); return end
+print("[ZHU] parent: " .. parentTarget:GetFullName())
+
+local CFG = {
+    MAX_DISTANCE     = 500,
+    PROJECTILE_SPEED = 800,
+    MAX_TRAVEL_TIME  = 1.0,
+    MAX_VELOCITY     = 200,
+    BOX_THICKNESS    = 1,
+    SKEL_THICKNESS   = 1,
+    FALLBACK_COLOR   = Color3.fromRGB(255, 255, 255),
+    LOCKED_COLOR     = Color3.fromRGB(255, 60, 60),
+    FOV_COLOR        = Color3.fromRGB(0, 255, 120),
+    SOFT_LOCK_ALPHA  = 0.35,
+    FOV_MIN          = 10,
+    FOV_MAX          = 500,
+}
+
+local COLOR_ON, COLOR_OFF = Color3.fromRGB(0,130,65), Color3.fromRGB(130,30,30)
+local COLOR_TEXT = Color3.fromRGB(230,230,230)
+
+local aimMode = "Head"
+local lockMode = "Blatant"
+local lockedPlr = nil
+local currentFOV = 120
+
+-- ===== GUI =====
+local gui = Instance.new("ScreenGui")
+gui.Name = "ZHUv2"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 2147483647
+gui.Parent = parentTarget
+
+-- ===== Floating toggle button =====
+local showBtn = Instance.new("TextButton")
+showBtn.Size = UDim2.fromOffset(110, 24)
+showBtn.Position = UDim2.new(0.5, -55, 0, 12)
+showBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+showBtn.BackgroundTransparency = 0
+showBtn.BorderSizePixel = 0
+showBtn.Text = "ZHU AIMBOT V2"
+showBtn.TextColor3 = CFG.FOV_COLOR
+showBtn.TextTransparency = 0
+showBtn.Font = Enum.Font.Code
+showBtn.TextSize = 11
+showBtn.ZIndex = 10
+showBtn.Parent = gui
+Instance.new("UICorner", showBtn).CornerRadius = UDim.new(0, 6)
+local sstroke = Instance.new("UIStroke")
+sstroke.Color = CFG.FOV_COLOR
+sstroke.Thickness = 1
+sstroke.Transparency = 0.4
+sstroke.Parent = showBtn
+
+-- ===== Main panel =====
+local panel = Instance.new("Frame")
+panel.Size = UDim2.fromOffset(360, 250)
+panel.AnchorPoint = Vector2.new(0.5, 0.5)
+panel.Position = UDim2.new(0.5, 0, 0.5, 0)
+panel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+panel.BorderSizePixel = 0
+panel.Active = true
+panel.Visible = false
+panel.ZIndex = 20
+panel.Parent = gui
+Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 6)
+local pstroke = Instance.new("UIStroke")
+pstroke.Color = CFG.FOV_COLOR
+pstroke.Thickness = 1
+pstroke.Transparency = 0.4
+pstroke.Parent = panel
+
+showBtn.MouseButton1Click:Connect(function()
+    panel.Visible = not panel.Visible
+end)
+
+-- ===== Title =====
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -110, 0, 22)
+title.Position = UDim2.fromOffset(8, 0)
+title.BackgroundTransparency = 1
+title.Text = "ZHU AIMBOT V2"
+title.TextColor3 = CFG.FOV_COLOR
+title.Font = Enum.Font.Code
+title.TextSize = 13
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.ZIndex = 21
+title.Parent = panel
+
+-- ===== Header buttons (- + X) =====
+local function headerBtn(symbol, x, color)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.fromOffset(20, 20)
+    b.Position = UDim2.fromOffset(x, 1)
+    b.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    b.BorderSizePixel = 0
+    b.Text = symbol
+    b.TextColor3 = color
+    b.Font = Enum.Font.Code
+    b.TextSize = 14
+    b.ZIndex = 22
+    b.Parent = panel
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 3)
+    return b
+end
+
+local minusBtn = headerBtn("-", 286, CFG.FOV_COLOR)
+local plusBtn  = headerBtn("+", 310, CFG.FOV_COLOR)
+local delBtn   = headerBtn("X", 334, Color3.fromRGB(255, 80, 80))
+
+-- Ghost toggle: invisible but still clickable
+minusBtn.MouseButton1Click:Connect(function()
+    showBtn.BackgroundTransparency = 1
+    showBtn.TextTransparency = 1
+    sstroke.Transparency = 1
+end)
+
+plusBtn.MouseButton1Click:Connect(function()
+    showBtn.BackgroundTransparency = 0
+    showBtn.TextTransparency = 0
+    sstroke.Transparency = 0.4
+end)
+
+delBtn.MouseButton1Click:Connect(function()
+    pcall(function() RunService:UnbindFromRenderStep("ZHU_Main") end)
+    _G.ZHU_SESSION = 0
+    gui:Destroy()
+end)
+
+-- ===== Divider / section label =====
+local function divider(y)
+    local d = Instance.new("Frame")
+    d.Size = UDim2.new(1, -16, 0, 1)
+    d.Position = UDim2.fromOffset(8, y)
+    d.BackgroundColor3 = CFG.FOV_COLOR
+    d.BackgroundTransparency = 0.6
+    d.BorderSizePixel = 0
+    d.ZIndex = 21
+    d.Parent = panel
+end
+divider(22)
+
+local function sectionLabel(t, y)
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(1, -16, 0, 14)
+    l.Position = UDim2.fromOffset(8, y)
+    l.BackgroundTransparency = 1
+    l.Text = " " .. t
+    l.TextColor3 = Color3.fromRGB(150, 150, 150)
+    l.Font = Enum.Font.Code
+    l.TextSize = 10
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.ZIndex = 21
+    l.Parent = panel
+end
+sectionLabel("MAIN", 26)
+
+-- ===== Toggle factory =====
+local function makeToggle(text, x, y, w, initial)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.fromOffset(w, 20)
+    b.Position = UDim2.fromOffset(x, y)
+    b.BorderSizePixel = 0
+    b.TextColor3 = COLOR_TEXT
+    b.Font = Enum.Font.Code
+    b.TextSize = 11
+    b.ZIndex = 21
+    b.Parent = panel
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 3)
+    local state = initial
+    local function refresh()
+        b.Text = text .. (state and " ON" or " OFF")
+        b.BackgroundColor3 = state and COLOR_ON or COLOR_OFF
+    end
+    refresh()
+    b.MouseButton1Click:Connect(function() state = not state; refresh() end)
+    return function() return state end, function(v) state = v; refresh() end
+end
+
+local getAimbot, setAimbot = makeToggle("Aimbot",      8,   42, 170, false)
+local getPred               = makeToggle("Prediction",  182, 42, 170, false)
+local getTeam               = makeToggle("Team Check",  8,   66, 170, false)
+local getWall               = makeToggle("Wall Check",  182, 66, 170, false)
+local getDeath              = makeToggle("Death Check", 8,   90, 170, false)
+
+-- ===== Aim mode cycle =====
+local aimModeBtn = Instance.new("TextButton")
+aimModeBtn.Size = UDim2.fromOffset(170, 20)
+aimModeBtn.Position = UDim2.fromOffset(182, 90)
+aimModeBtn.BorderSizePixel = 0
+aimModeBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 130)
+aimModeBtn.TextColor3 = COLOR_TEXT
+aimModeBtn.Font = Enum.Font.Code
+aimModeBtn.TextSize = 11
+aimModeBtn.Text = "Aim: Head"
+aimModeBtn.ZIndex = 21
+aimModeBtn.Parent = panel
+Instance.new("UICorner", aimModeBtn).CornerRadius = UDim.new(0, 3)
+aimModeBtn.MouseButton1Click:Connect(function()
+    aimMode = (aimMode == "Head") and "Body" or "Head"
+    aimModeBtn.Text = "Aim: " .. aimMode
+end)
+
+divider(114)
+sectionLabel("OTHERS", 118)
+
+local getESP   = makeToggle("ESP",        8,   134, 170, false)
+local getFOV   = makeToggle("FOV Circle", 182, 134, 170, false)
+
+-- ===== Lock mode cycle =====
+local lockModeBtn = Instance.new("TextButton")
+lockModeBtn.Size = UDim2.fromOffset(170, 20)
+lockModeBtn.Position = UDim2.fromOffset(8, 158)
+lockModeBtn.BorderSizePixel = 0
+lockModeBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 130)
+lockModeBtn.TextColor3 = COLOR_TEXT
+lockModeBtn.Font = Enum.Font.Code
+lockModeBtn.TextSize = 11
+lockModeBtn.Text = "Lock: Blatant"
+lockModeBtn.ZIndex = 21
+lockModeBtn.Parent = panel
+Instance.new("UICorner", lockModeBtn).CornerRadius = UDim.new(0, 3)
+lockModeBtn.MouseButton1Click:Connect(function()
+    lockMode = (lockMode == "Blatant") and "Legit" or "Blatant"
+    lockModeBtn.Text = "Lock: " .. lockMode
+end)
+
+local getCross = makeToggle("Crosshair",  182, 158, 170, false)
+
+-- ===== FOV control row =====
+local fovY = 182
+local function fovBtn(t, x, w)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.fromOffset(w, 24)
+    b.Position = UDim2.fromOffset(x, fovY)
+    b.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    b.BorderSizePixel = 0
+    b.Text = t
+    b.TextColor3 = COLOR_TEXT
+    b.Font = Enum.Font.Code
+    b.TextSize = 13
+    b.ZIndex = 21
+    b.Parent = panel
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 3)
+    return b
+end
+
+local fovDec100 = fovBtn("--", 8,   54)
+local fovDec10  = fovBtn("-",  66,  54)
+local fovInc10  = fovBtn("+",  240, 54)
+local fovInc100 = fovBtn("++", 298, 54)
+
+local fovDisplay = Instance.new("TextLabel")
+fovDisplay.Size = UDim2.fromOffset(112, 24)
+fovDisplay.Position = UDim2.fromOffset(124, fovY)
+fovDisplay.BackgroundColor3 = Color3.fromRGB(14, 14, 14)
+fovDisplay.BorderSizePixel = 0
+fovDisplay.Text = tostring(currentFOV)
+fovDisplay.TextColor3 = CFG.FOV_COLOR
+fovDisplay.Font = Enum.Font.Code
+fovDisplay.TextSize = 13
+fovDisplay.ZIndex = 21
+fovDisplay.Parent = panel
+Instance.new("UICorner", fovDisplay).CornerRadius = UDim.new(0, 3)
+
+local function setFOV(v)
+    currentFOV = math.clamp(v, CFG.FOV_MIN, CFG.FOV_MAX)
+    fovDisplay.Text = tostring(currentFOV)
+end
+fovDec100.MouseButton1Click:Connect(function() setFOV(currentFOV - 100) end)
+fovDec10.MouseButton1Click:Connect(function()  setFOV(currentFOV - 10)  end)
+fovInc10.MouseButton1Click:Connect(function()  setFOV(currentFOV + 10)  end)
+fovInc100.MouseButton1Click:Connect(function() setFOV(currentFOV + 100) end)
+
+-- ===== Status =====
+local statusLbl = Instance.new("TextLabel")
+statusLbl.Size = UDim2.new(1, -16, 0, 20)
+statusLbl.Position = UDim2.fromOffset(8, 214)
+statusLbl.BackgroundColor3 = Color3.fromRGB(14, 14, 14)
+statusLbl.BorderSizePixel = 0
+statusLbl.Text = " OFF"
+statusLbl.TextColor3 = Color3.fromRGB(180, 180, 180)
+statusLbl.Font = Enum.Font.Code
+statusLbl.TextSize = 11
+statusLbl.TextXAlignment = Enum.TextXAlignment.Left
+statusLbl.ZIndex = 21
+statusLbl.Parent = panel
+Instance.new("UICorner", statusLbl).CornerRadius = UDim.new(0, 3)
+
+-- ===== Drag =====
+local dragging, ds, sp
+title.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        ds = i.Position
+        sp = panel.Position
+        i.Changed:Connect(function()
+            if i.UserInputState == Enum.UserInputState.End then dragging = false end
+        end)
+    end
+end)
+UIS.InputChanged:Connect(function(i)
+    if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+        local d = i.Position - ds
+        panel.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X, sp.Y.Scale, sp.Y.Offset + d.Y)
+    end
+end)
+
+-- ===== Draw layer =====
+local dl = Instance.new("Frame")
+dl.Size = UDim2.fromScale(1, 1)
+dl.BackgroundTransparency = 1
+dl.BorderSizePixel = 0
+dl.ZIndex = 30
+dl.Parent = gui
+
+local lines = {}
+local li = 1
+local function getL()
+    local l = lines[li]
+    if not l then
+        l = Instance.new("Frame")
+        l.BorderSizePixel = 0
+        l.ZIndex = 31
+        l.Parent = dl
+        lines[li] = l
+    end
+    li = li + 1
+    return l
+end
+local function resetL()
+    for _, l in ipairs(lines) do l.Visible = false end
+    li = 1
+end
+local function drawL(a, b, t, c)
+    local l = getL()
+    local d = b - a
+    local len = d.Magnitude
+    if len < 1 then l.Visible = false return end
+    l.Visible = true
+    l.BackgroundColor3 = c
+    l.AnchorPoint = Vector2.new(0.5, 0.5)
+    l.Size = UDim2.fromOffset(len, t)
+    l.Position = UDim2.fromOffset((a.X + b.X) / 2, (a.Y + b.Y) / 2)
+    l.Rotation = math.deg(math.atan2(d.Y, d.X))
+end
+local function drawBox(tl, br, c, t)
+    drawL(tl, Vector2.new(br.X, tl.Y), t, c)
+    drawL(Vector2.new(br.X, tl.Y), br, t, c)
+    drawL(br, Vector2.new(tl.X, br.Y), t, c)
+    drawL(Vector2.new(tl.X, br.Y), tl, t, c)
+end
+
+-- ===== FOV ring =====
+local fovFrame = Instance.new("Frame")
+fovFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+fovFrame.Position = UDim2.fromScale(0.5, 0.5)
+fovFrame.BackgroundTransparency = 1
+fovFrame.BorderSizePixel = 0
+fovFrame.Visible = false
+fovFrame.ZIndex = 40
+fovFrame.Parent = dl
+Instance.new("UICorner", fovFrame).CornerRadius = UDim.new(0.5, 0)
+
+local fovStroke = Instance.new("UIStroke")
+fovStroke.Thickness = 1.5
+fovStroke.Color = CFG.FOV_COLOR
+fovStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+fovStroke.Parent = fovFrame
+
+-- ===== Crosshair dot =====
+local cross = Instance.new("Frame")
+cross.AnchorPoint = Vector2.new(0.5, 0.5)
+cross.Position = UDim2.fromScale(0.5, 0.5)
+cross.Size = UDim2.fromOffset(6, 6)
+cross.BackgroundColor3 = CFG.FOV_COLOR
+cross.BackgroundTransparency = 0
+cross.BorderSizePixel = 0
+cross.Visible = false
+cross.ZIndex = 50
+cross.Parent = dl
+Instance.new("UICorner", cross).CornerRadius = UDim.new(0.5, 0)
+
+local function updateOverlay(locked)
+    local col = locked and CFG.LOCKED_COLOR or CFG.FOV_COLOR
+    local fa = getFOV()
+    fovFrame.Visible = fa
+    if fa then
+        fovFrame.Size = UDim2.fromOffset(currentFOV * 2, currentFOV * 2)
+        fovStroke.Color = col
+    end
+    local ca = getCross()
+    cross.Visible = ca
+    if ca then cross.BackgroundColor3 = col end
+end
+
+-- ===== Rig tables =====
+local R15 = {
+    {"Head","UpperTorso"},{"UpperTorso","LowerTorso"},
+    {"UpperTorso","LeftUpperArm"},{"LeftUpperArm","LeftLowerArm"},{"LeftLowerArm","LeftHand"},
+    {"UpperTorso","RightUpperArm"},{"RightUpperArm","RightLowerArm"},{"RightLowerArm","RightHand"},
+    {"LowerTorso","LeftUpperLeg"},{"LeftUpperLeg","LeftLowerLeg"},{"LeftLowerLeg","LeftFoot"},
+    {"LowerTorso","RightUpperLeg"},{"RightUpperLeg","RightLowerLeg"},{"RightLowerLeg","RightFoot"},
+}
+local R6S = {{"Head","Torso"},{"Torso","Left Arm"},{"Torso","Right Arm"},{"Torso","Left Leg"},{"Torso","Right Leg"}}
+local R6U = {{"Head","Torso"},{"Torso","LeftArm"},{"Torso","RightArm"},{"Torso","LeftLeg"},{"Torso","RightLeg"}}
+
+local function toScr(v3)
+    local cam = workspace.CurrentCamera
+    if not cam then return nil end
+    local sp, on = cam:WorldToViewportPoint(v3)
+    if on then return Vector2.new(sp.X, sp.Y) end
+end
+local function partPos(ch, n)
+    local p = ch:FindFirstChild(n)
+    if p and p:IsA("BasePart") then return toScr(p.Position) end
+end
+local function drawSkel(ch, c, t)
+    local bones = ch:FindFirstChild("UpperTorso") and R15
+        or (ch:FindFirstChild("Left Arm") and R6S or R6U)
+    for _, pr in ipairs(bones) do
+        local a = partPos(ch, pr[1])
+        local b = partPos(ch, pr[2])
+        if a and b then drawL(a, b, t, c) end
+    end
+end
+local function bounds(ch)
+    local hrp = ch:FindFirstChild("HumanoidRootPart")
+    local head = ch:FindFirstChild("Head")
+    if not (hrp and head) then return end
+    local hs = toScr(hrp.Position)
+    if not hs then return end
+    local hd = toScr(head.Position + Vector3.new(0, 0.5, 0))
+    local ft = toScr(hrp.Position - Vector3.new(0, 3, 0))
+    if not (hd and ft) then return end
+    local h = math.abs(ft.Y - hd.Y)
+    if h < 10 then return end
+    local w = h * 0.55
+    return Vector2.new(hs.X - w / 2, hd.Y), Vector2.new(hs.X + w / 2, ft.Y)
+end
+local function aimPart(ch)
+    if aimMode == "Head" then
+        local h = ch:FindFirstChild("Head")
+        if h and h:IsA("BasePart") then return h end
+    else
+        local t = ch:FindFirstChild("UpperTorso") or ch:FindFirstChild("Torso")
+        if t and t:IsA("BasePart") then return t end
+    end
+    return ch:FindFirstChild("HumanoidRootPart")
+end
+
+-- ===== Wall check =====
+local wp = RaycastParams.new()
+wp.FilterType = Enum.RaycastFilterType.Exclude
+wp.IgnoreWater = true
+local function los(from, tp)
+    if not getWall() then return true end
+    local f = {tp.Parent}
+    if LP.Character then table.insert(f, LP.Character) end
+    wp.FilterDescendantsInstances = f
+    return workspace:Raycast(from, tp.Position - from, wp) == nil
+end
+
+-- ===== Team check =====
+local function getTeamId(player)
+    if player.Team then return "team:" .. player.Team.Name end
+    local a1 = player:GetAttribute("Team")
+    if a1 ~= nil then return "attr:" .. tostring(a1) end
+    if player.Character then
+        local a2 = player.Character:GetAttribute("Team")
+        if a2 ~= nil then return "charattr:" .. tostring(a2) end
+    end
+    if player.TeamColor and player.TeamColor.Name ~= "White" then
+        return "color:" .. player.TeamColor.Name
+    end
+    return nil
+end
+local function sameTeam(p)
+    if not getTeam() then return false end
+    local mine = getTeamId(LP)
+    local theirs = getTeamId(p)
+    return mine ~= nil and theirs ~= nil and mine == theirs
+end
+
+local function valid(p)
+    if p == LP then return false end
+    local c = p.Character
+    if not c then return false end
+    local h = c:FindFirstChildOfClass("Humanoid")
+    if not h or h.Health <= 0 then return false end
+    if getDeath() and h.Health <= 0 then return false end
+    if sameTeam(p) then return false end
+    return true
+end
+
+-- ===== Target selection =====
+local function findTarget()
+    local cam = workspace.CurrentCamera
+    if not cam then return nil end
+    local vp = cam.ViewportSize
+    local cx, cy = vp.X / 2, vp.Y / 2
+    local mc = LP.Character
+    local mh = mc and mc:FindFirstChild("HumanoidRootPart")
+    local org = mh and mh.Position or cam.CFrame.Position
+    local best, bd = nil, math.huge
+    for _, p in ipairs(Players:GetPlayers()) do
+        if valid(p) then
+            local ch = p.Character
+            local pt = aimPart(ch)
+            if pt and (pt.Position - org).Magnitude <= CFG.MAX_DISTANCE then
+                local sp, on = cam:WorldToViewportPoint(pt.Position)
+                if on then
+                    local dx, dy = sp.X - cx, sp.Y - cy
+                    local d = math.sqrt(dx * dx + dy * dy)
+                    if d <= currentFOV and d < bd and los(cam.CFrame.Position, pt) then
+                        best, bd = p, d
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+-- ===== Aim =====
+local function applyAim(pt)
+    local cam = workspace.CurrentCamera
+    if not cam then return 0 end
+    local pos = pt.Position
+    local off = 0
+    if getPred() then
+        local ch = pt.Parent
+        local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+        local v = (hrp or pt).AssemblyLinearVelocity
+        if v.Magnitude > CFG.MAX_VELOCITY then v = v.Unit * CFG.MAX_VELOCITY end
+        local dist = (pos - cam.CFrame.Position).Magnitude
+        local tt = math.min(dist / math.max(CFG.PROJECTILE_SPEED, 1), CFG.MAX_TRAVEL_TIME)
+        local np = pos + v * tt
+        off = (np - pos).Magnitude
+        pos = np
+    end
+    local look = CFrame.lookAt(cam.CFrame.Position, pos)
+    if lockMode == "Legit" then
+        cam.CFrame = cam.CFrame:Lerp(look, CFG.SOFT_LOCK_ALPHA)
+    else
+        cam.CFrame = look
+    end
+    return off
+end
+
+local function teamColor(p)
+    local t = p.Team
+    if t then
+        local tc = t.TeamColor
+        if typeof(tc) == "BrickColor" then return tc.Color end
+        if typeof(tc) == "Color3" then return tc end
+    end
+    return CFG.FALLBACK_COLOR
+end
+
+-- ===== Render loop =====
+RunService:BindToRenderStep("ZHU_Main", Enum.RenderPriority.Camera.Value + 1, function()
+    if _G.ZHU_SESSION ~= MY_SESSION then
+        pcall(function() RunService:UnbindFromRenderStep("ZHU_Main") end)
+        if gui then gui:Destroy() end
+        return
+    end
+
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+
+    resetL()
+
+    local target = getAimbot() and findTarget() or nil
+    local pt = target and target.Character and aimPart(target.Character) or nil
+
+    if target and pt then
+        local off = applyAim(pt)
+        lockedPlr = target
+        local predTxt = ""
+        if getPred() and off > 0.05 then
+            predTxt = string.format("  pred:+%.1f", off)
+        end
+        if lockMode == "Legit" then
+            statusLbl.Text = " LEGIT  [" .. aimMode .. "]" .. predTxt
+            statusLbl.TextColor3 = Color3.fromRGB(120, 180, 255)
+        else
+            statusLbl.Text = " BLATANT  [" .. aimMode .. "]" .. predTxt
+            statusLbl.TextColor3 = CFG.LOCKED_COLOR
+        end
+    else
+        lockedPlr = nil
+        statusLbl.Text = getAimbot() and " SEARCHING" or " OFF"
+        statusLbl.TextColor3 = getAimbot() and Color3.fromRGB(200, 200, 100) or Color3.fromRGB(180, 180, 180)
+    end
+
+    updateOverlay(lockedPlr ~= nil)
+
+    if not getESP() then return end
+
+    local mp = cam.CFrame.Position
+    for _, p in ipairs(Players:GetPlayers()) do
+        if valid(p) then
+            local ch = p.Character
+            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+            if hrp and (hrp.Position - mp).Magnitude <= CFG.MAX_DISTANCE then
+                local isL = (p == lockedPlr)
+                local color = isL and CFG.LOCKED_COLOR or teamColor(p)
+                local tl, br = bounds(ch)
+                if tl and br then drawBox(tl, br, color, CFG.BOX_THICKNESS) end
+                drawSkel(ch, color, CFG.SKEL_THICKNESS)
+            end
+        end
+    end
+end)
+
+-- ===== Notification =====
+task.spawn(function()
+    local SG = game:GetService("StarterGui")
+    for i = 1, 20 do
+        local ok = pcall(function()
+            SG:SetCore("SendNotification", {
+                Title = "ZHU AIMBOT V2",
+                Text = "Owned by Dragonmastersigmadoy — do not claim this script as your own.",
+                Duration = 10,
+            })
+        end)
+        if ok then print("[ZHU] notification ok"); return end
+        task.wait(0.5)
+    end
+end)
+
+print("[ZHU] loaded OK — session " .. MY_SESSION)
